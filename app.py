@@ -5,7 +5,6 @@ import pickle
 from PIL import Image
 from skimage.feature import graycomatrix, graycoprops
 from skimage import img_as_ubyte
-import matplotlib.pyplot as plt
 
 st.set_page_config(page_title="Crop Disease Detector", page_icon="🌿", layout="wide")
 
@@ -108,23 +107,30 @@ def calculate_severity_score(image):
     orig, hsv, mask, segmented = preprocess_image(image)
     total_leaf_pixels = np.sum(mask > 0)
     if total_leaf_pixels == 0:
-        return 0, "No Leaf", "gray", None
+        return 0, "No Leaf Detected", "gray", None
+    
     lower_diseased = np.array([5, 30, 30])
     upper_diseased = np.array([25, 255, 255])
     diseased_mask = cv2.inRange(hsv, lower_diseased, upper_diseased)
+    
     lower_necrotic = np.array([0, 0, 0])
     upper_necrotic = np.array([180, 255, 60])
     necrotic_mask = cv2.inRange(hsv, lower_necrotic, upper_necrotic)
+    
     lower_yellow = np.array([20, 40, 100])
     upper_yellow = np.array([35, 255, 255])
     yellow_mask = cv2.inRange(hsv, lower_yellow, upper_yellow)
+    
     total_diseased = cv2.bitwise_or(diseased_mask, necrotic_mask)
     total_diseased = cv2.bitwise_or(total_diseased, yellow_mask)
     total_diseased = cv2.bitwise_and(total_diseased, mask)
+    
     kernel = np.ones((3, 3), np.uint8)
     total_diseased = cv2.morphologyEx(total_diseased, cv2.MORPH_OPEN, kernel)
+    
     diseased_pixels = np.sum(total_diseased > 0)
     severity_score = (diseased_pixels / total_leaf_pixels) * 100
+    
     if severity_score < 5:
         return severity_score, "Healthy/Minimal", "green", total_diseased
     elif severity_score < 15:
@@ -133,39 +139,6 @@ def calculate_severity_score(image):
         return severity_score, "Moderate", "orange", total_diseased
     else:
         return severity_score, "Severe", "red", total_diseased
-
-def generate_explanation_heatmap(image, model, scaler, class_names, grid_size=6):
-    orig, hsv, mask, segmented = preprocess_image(image)
-    baseline_features = extract_all_features(image)
-    baseline_scaled = scaler.transform(baseline_features.reshape(1, -1))
-    baseline_pred_idx = model.predict(baseline_scaled)[0]
-    if hasattr(model, "predict_proba"):
-        baseline_proba = model.predict_proba(baseline_scaled)[0]
-        baseline_confidence = baseline_proba[baseline_pred_idx]
-    else:
-        baseline_confidence = 1.0
-    h, w = orig.shape[:2]
-    cell_h, cell_w = h // grid_size, w // grid_size
-    importance_map = np.zeros((grid_size, grid_size))
-    for i in range(grid_size):
-        for j in range(grid_size):
-            occluded = orig.copy()
-            y1, y2 = i * cell_h, (i + 1) * cell_h
-            x1, x2 = j * cell_w, (j + 1) * cell_w
-            occluded[y1:y2, x1:x2] = [128, 128, 128]
-            occluded_features = extract_all_features(occluded)
-            occluded_scaled = scaler.transform(occluded_features.reshape(1, -1))
-            if hasattr(model, "predict_proba"):
-                occluded_proba = model.predict_proba(occluded_scaled)[0]
-                occluded_confidence = occluded_proba[baseline_pred_idx]
-                importance_map[i, j] = max(0, baseline_confidence - occluded_confidence)
-            else:
-                occluded_pred = model.predict(occluded_scaled)[0]
-                importance_map[i, j] = 1.0 if occluded_pred != baseline_pred_idx else 0.0
-    if importance_map.max() > importance_map.min():
-        importance_map = (importance_map - importance_map.min()) / (importance_map.max() - importance_map.min())
-    importance_map_resized = cv2.resize(importance_map.astype(np.float32), (w, h), interpolation=cv2.INTER_LINEAR)
-    return importance_map_resized, class_names[baseline_pred_idx], baseline_confidence
 
 def format_class_name(class_name):
     parts = class_name.split("___")
@@ -176,17 +149,80 @@ def format_class_name(class_name):
         return f"{crop} - {condition}"
     return class_name.replace("_", " ")
 
+def get_treatment_recommendation(disease_name, severity_class):
+    disease_lower = disease_name.lower()
+    treatments = {
+        "early blight": {
+            "description": "Fungal disease causing dark spots with concentric rings",
+            "organic": ["Remove infected leaves", "Apply copper fungicide", "Improve air circulation"],
+            "chemical": ["Chlorothalonil", "Mancozeb"],
+            "prevention": ["Crop rotation", "Mulching", "Drip irrigation"]
+        },
+        "late blight": {
+            "description": "Serious fungal disease causing water-soaked lesions",
+            "organic": ["Remove infected plants immediately", "Copper-based fungicides"],
+            "chemical": ["Metalaxyl", "Chlorothalonil"],
+            "prevention": ["Avoid overhead watering", "Plant resistant varieties", "Good spacing"]
+        },
+        "bacterial spot": {
+            "description": "Bacterial infection causing small dark spots",
+            "organic": ["Copper spray", "Remove infected leaves", "Improve drainage"],
+            "chemical": ["Copper hydroxide", "Streptomycin (if approved)"],
+            "prevention": ["Use disease-free seeds", "Avoid overhead irrigation", "Sanitize tools"]
+        },
+        "septoria leaf spot": {
+            "description": "Fungal disease with circular spots with gray centers",
+            "organic": ["Neem oil", "Remove lower leaves", "Mulch around plants"],
+            "chemical": ["Chlorothalonil", "Mancozeb"],
+            "prevention": ["Stake plants", "Water at base", "Remove debris"]
+        },
+        "leaf mold": {
+            "description": "Fungal disease with pale green spots on upper leaves",
+            "organic": ["Improve ventilation", "Reduce humidity", "Sulfur spray"],
+            "chemical": ["Chlorothalonil"],
+            "prevention": ["Space plants properly", "Prune for air flow", "Control humidity"]
+        },
+        "common rust": {
+            "description": "Fungal disease with small circular to elongated pustules",
+            "organic": ["Sulfur-based fungicides", "Remove infected leaves early"],
+            "chemical": ["Azoxystrobin", "Propiconazole"],
+            "prevention": ["Plant resistant varieties", "Early planting", "Proper spacing"]
+        },
+        "northern leaf blight": {
+            "description": "Long gray-green lesions on leaves",
+            "organic": ["Rotate crops", "Remove crop residue"],
+            "chemical": ["Pyraclostrobin", "Azoxystrobin"],
+            "prevention": ["Use resistant hybrids", "Plow under residue", "Crop rotation"]
+        },
+        "gray leaf spot": {
+            "description": "Rectangular lesions with gray coloration",
+            "organic": ["Crop rotation", "Tillage to bury residue"],
+            "chemical": ["Strobilurin fungicides"],
+            "prevention": ["Resistant varieties", "Residue management", "Crop rotation"]
+        }
+    }
+    
+    for key in treatments:
+        if key in disease_lower:
+            treatment = treatments[key]
+            urgency = "🔴 URGENT" if severity_class == "Severe" else "🟠 IMPORTANT" if severity_class == "Moderate" else "🟡 MONITOR"
+            return treatment, urgency
+    
+    return None, "ℹ️ MONITOR"
+
 def main():
-    st.title("🌿 Crop Leaf Disease Detection")
-    st.markdown("Upload a leaf image to detect diseases in **Tomato**, **Potato**, or **Corn/Maize** plants.")
+    st.title("🌿 Crop Leaf Disease Detection System")
+    st.markdown("### AI-Powered Disease Diagnosis with Severity Analysis")
+    st.markdown("Upload a leaf image to detect diseases in **Tomato**, **Potato**, or **Corn/Maize** plants")
     
     try:
         model, scaler, class_names = load_model()
     except Exception as e:
-        st.error(f"Error loading model: {e}")
+        st.error(f"❌ Error loading model: {e}")
+        st.info("Please ensure model files are present in the app directory")
         return
     
-    uploaded_file = st.file_uploader("Choose a leaf image...", type=["jpg", "jpeg", "png"])
+    uploaded_file = st.file_uploader("📤 Choose a leaf image", type=["jpg", "jpeg", "png"], help="Upload a clear image of a leaf")
     
     if uploaded_file is not None:
         image = Image.open(uploaded_file)
@@ -199,103 +235,149 @@ def main():
         else:
             img_array = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
         
-        col1, col2 = st.columns(2)
+        col1, col2 = st.columns([1, 1])
         with col1:
             st.image(image, caption="Uploaded Image", use_container_width=True)
         
-        if st.button("🔍 Analyze Leaf", type="primary", use_container_width=True):
-            with st.spinner("Analyzing..."):
+        if st.button("🔬 Analyze Leaf", type="primary", use_container_width=True):
+            with st.spinner("🔍 Analyzing image..."):
                 try:
                     features = extract_all_features(img_array)
                     features_scaled = scaler.transform(features.reshape(1, -1))
                     prediction_idx = model.predict(features_scaled)[0]
                     prediction = class_names[prediction_idx]
                     
-                    confidence = None
-                    if hasattr(model, "predict_proba"):
-                        proba = model.predict_proba(features_scaled)[0]
-                        confidence = proba[prediction_idx]
-                    
                     severity_score, severity_class, severity_color, diseased_mask = calculate_severity_score(img_array)
+                    orig, _, mask, _ = preprocess_image(img_array)
                     
                     st.markdown("---")
                     st.subheader("📊 Diagnosis Results")
                     
-                    result_col1, result_col2, result_col3 = st.columns(3)
+                    result_col1, result_col2 = st.columns([2, 1])
                     
                     with result_col1:
                         formatted_prediction = format_class_name(prediction)
                         if "healthy" in prediction.lower():
-                            st.success(f"✅ {formatted_prediction}")
+                            st.success(f"### ✅ {formatted_prediction}")
+                            st.balloons()
                         else:
-                            st.warning(f"⚠️ {formatted_prediction}")
+                            st.warning(f"### ⚠️ {formatted_prediction}")
                     
                     with result_col2:
-                        if confidence:
-                            st.metric("Confidence", f"{confidence:.1%}")
-                    
-                    with result_col3:
                         if severity_color == "green":
-                            st.success(f"🟢 {severity_class}")
+                            st.success(f"### 🟢 {severity_class}")
                         elif severity_color == "yellow":
-                            st.warning(f"🟡 {severity_class}")
+                            st.warning(f"### 🟡 {severity_class}")
                         elif severity_color == "orange":
-                            st.warning(f"🟠 {severity_class}")
+                            st.warning(f"### 🟠 {severity_class}")
                         else:
-                            st.error(f"🔴 {severity_class}")
-                        st.caption(f"Severity: {severity_score:.1f}%")
+                            st.error(f"### 🔴 {severity_class}")
+                        st.metric("Severity", f"{severity_score:.1f}%", help="Percentage of leaf affected by disease")
                     
                     st.markdown("---")
-                    st.subheader("📈 Severity Analysis")
+                    st.subheader("📈 Severity Analysis & Visualization")
                     
-                    sev_col1, sev_col2 = st.columns(2)
+                    viz_col1, viz_col2, viz_col3 = st.columns([1, 1, 1])
                     
-                    with sev_col1:
+                    with viz_col1:
+                        st.image(cv2.cvtColor(orig, cv2.COLOR_BGR2RGB), caption="Original Leaf", use_container_width=True)
+                    
+                    with viz_col2:
                         if diseased_mask is not None:
-                            orig, _, _, _ = preprocess_image(img_array)
                             overlay = orig.copy()
                             overlay[diseased_mask > 0] = [0, 0, 255]
-                            result_img = cv2.addWeighted(orig, 0.7, overlay, 0.3, 0)
-                            st.image(cv2.cvtColor(result_img, cv2.COLOR_BGR2RGB), 
-                                    caption="Diseased Regions (red)", use_container_width=True)
+                            result_img = cv2.addWeighted(orig, 0.6, overlay, 0.4, 0)
+                            st.image(cv2.cvtColor(result_img, cv2.COLOR_BGR2RGB), caption="Diseased Regions (Red)", use_container_width=True)
                     
-                    with sev_col2:
-                        st.markdown(f"**Severity Score: {severity_score:.1f}%**")
+                    with viz_col3:
+                        st.markdown("#### Severity Scale")
                         st.progress(min(severity_score / 100, 1.0))
+                        st.markdown(f"**{severity_score:.1f}%** of leaf affected")
+                        st.markdown("---")
+                        if severity_score < 5:
+                            st.success("🟢 **Healthy/Minimal**\n\nNo immediate action needed")
+                        elif severity_score < 15:
+                            st.warning("🟡 **Mild**\n\nMonitor closely and consider preventive treatment")
+                        elif severity_score < 35:
+                            st.warning("🟠 **Moderate**\n\nTreatment recommended soon")
+                        else:
+                            st.error("🔴 **Severe**\n\n⚠️ Urgent treatment required!")
+                    
+                    if "healthy" not in prediction.lower():
+                        st.markdown("---")
+                        st.subheader("💊 Treatment Recommendations")
+                        
+                        treatment, urgency = get_treatment_recommendation(prediction, severity_class)
+                        
+                        if treatment:
+                            st.info(f"**{urgency}** - {treatment['description']}")
+                            
+                            treat_col1, treat_col2, treat_col3 = st.columns(3)
+                            
+                            with treat_col1:
+                                st.markdown("#### 🌱 Organic Treatment")
+                                for item in treatment['organic']:
+                                    st.markdown(f"• {item}")
+                            
+                            with treat_col2:
+                                st.markdown("#### 🧪 Chemical Treatment")
+                                for item in treatment['chemical']:
+                                    st.markdown(f"• {item}")
+                            
+                            with treat_col3:
+                                st.markdown("#### 🛡️ Prevention")
+                                for item in treatment['prevention']:
+                                    st.markdown(f"• {item}")
+                        else:
+                            st.info("Consult with a local agricultural expert for specific treatment recommendations.")
                     
                     st.markdown("---")
-                    st.subheader("🔍 Explainable AI")
-                    
-                    with st.spinner("Generating heatmap..."):
-                        importance_map, _, _ = generate_explanation_heatmap(img_array, model, scaler, class_names, grid_size=6)
-                        
-                        if importance_map is not None:
-                            exp_col1, exp_col2 = st.columns(2)
-                            
-                            with exp_col1:
-                                fig, ax = plt.subplots(figsize=(6, 6))
-                                im = ax.imshow(importance_map, cmap="jet", vmin=0, vmax=1)
-                                ax.set_title("Region Importance")
-                                ax.axis("off")
-                                plt.colorbar(im, ax=ax, fraction=0.046)
-                                st.pyplot(fig)
-                                plt.close()
-                            
-                            with exp_col2:
-                                orig, _, _, _ = preprocess_image(img_array)
-                                heatmap = cv2.applyColorMap((importance_map * 255).astype(np.uint8), cv2.COLORMAP_JET)
-                                overlay = cv2.addWeighted(orig, 0.6, heatmap, 0.4, 0)
-                                st.image(cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB), caption="Explanation Overlay", use_container_width=True)
+                    st.success("✅ Analysis complete! Download this page as PDF for your records.")
                 
                 except Exception as e:
-                    st.error(f"Error: {e}")
+                    st.error(f"❌ Error during analysis: {str(e)}")
+                    st.info("Please try uploading a different image or check image quality")
     
     with st.sidebar:
-        st.header("ℹ️ About")
-        st.markdown("Traditional ML with handcrafted features")
-        st.markdown("**Novel Features:**")
-        st.markdown("- 📊 Severity Scoring")
-        st.markdown("- 🔍 Explainable AI")
+        st.image("https://img.icons8.com/color/96/000000/leaf.png", width=80)
+        st.markdown("## 🌿 About")
+        st.markdown("This application uses **Traditional Machine Learning** with handcrafted features:")
+        st.markdown("• **Color** - HSV histograms")
+        st.markdown("• **Texture** - GLCM features")
+        st.markdown("• **Shape** - Morphological features")
+        
+        st.markdown("---")
+        st.markdown("### 📊 Supported Crops")
+        st.markdown("🍅 **Tomato** - 8 disease types")
+        st.markdown("🥔 **Potato** - 3 disease types")
+        st.markdown("🌽 **Corn/Maize** - 4 disease types")
+        
+        st.markdown("---")
+        st.markdown("### ✨ Novel Features")
+        st.markdown("📈 **Severity Scoring**")
+        st.markdown("Quantifies disease as % of affected leaf area")
+        st.markdown("")
+        st.markdown("💊 **Treatment Recommendations**")
+        st.markdown("Organic & chemical treatment options")
+        
+        st.markdown("---")
+        st.markdown("### 👨‍💻 Developed By")
+        st.markdown("**Muhammad Haris** (413826)")
+        st.markdown("**Muhammad Arham Siddiqui** (428887)")
+        st.markdown("")
+        st.markdown("**Course:** CS-471 Machine Learning")
+        st.markdown("**Institution:** NUST, Pakistan")
+        st.markdown("**Class:** BEE-14 B")
+        
+        st.markdown("---")
+        st.markdown("### ℹ️ How to Use")
+        st.markdown("1. Upload a clear leaf image")
+        st.markdown("2. Click 'Analyze Leaf' button")
+        st.markdown("3. View diagnosis and severity")
+        st.markdown("4. Follow treatment recommendations")
+        
+        st.markdown("---")
+        st.caption("© 2024 NUST | All rights reserved")
 
 if __name__ == "__main__":
     main()
