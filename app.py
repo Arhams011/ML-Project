@@ -109,24 +109,39 @@ def calculate_severity_score(image):
     if total_leaf_pixels == 0:
         return 0, "No Leaf Detected", "gray", None
     
-    lower_diseased = np.array([5, 30, 30])
+    h, s, v = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
+    
+    lower_diseased = np.array([5, 40, 50])
     upper_diseased = np.array([25, 255, 255])
     diseased_mask = cv2.inRange(hsv, lower_diseased, upper_diseased)
     
-    lower_necrotic = np.array([0, 0, 0])
-    upper_necrotic = np.array([180, 255, 60])
+    lower_necrotic = np.array([5, 20, 0])
+    upper_necrotic = np.array([25, 255, 80])
     necrotic_mask = cv2.inRange(hsv, lower_necrotic, upper_necrotic)
     
-    lower_yellow = np.array([20, 40, 100])
+    lower_yellow = np.array([20, 50, 120])
     upper_yellow = np.array([35, 255, 255])
     yellow_mask = cv2.inRange(hsv, lower_yellow, upper_yellow)
     
+    shadow_mask = np.zeros_like(mask)
+    shadow_mask[(v < 60) & (s < 40)] = 255
+    
     total_diseased = cv2.bitwise_or(diseased_mask, necrotic_mask)
     total_diseased = cv2.bitwise_or(total_diseased, yellow_mask)
+    total_diseased = cv2.bitwise_and(total_diseased, cv2.bitwise_not(shadow_mask))
     total_diseased = cv2.bitwise_and(total_diseased, mask)
     
     kernel = np.ones((3, 3), np.uint8)
     total_diseased = cv2.morphologyEx(total_diseased, cv2.MORPH_OPEN, kernel)
+    
+    contours, _ = cv2.findContours(total_diseased, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if contours:
+        min_area = total_leaf_pixels * 0.01
+        mask_cleaned = np.zeros_like(total_diseased)
+        for contour in contours:
+            if cv2.contourArea(contour) > min_area:
+                cv2.drawContours(mask_cleaned, [contour], -1, 255, -1)
+        total_diseased = mask_cleaned
     
     diseased_pixels = np.sum(total_diseased > 0)
     severity_score = (diseased_pixels / total_leaf_pixels) * 100
@@ -151,78 +166,79 @@ def format_class_name(class_name):
 
 def get_treatment_recommendation(disease_name, severity_class):
     disease_lower = disease_name.lower()
+    
     treatments = {
-        "early blight": {
-            "description": "Fungal disease causing dark spots with concentric rings",
-            "organic": ["Remove infected leaves", "Apply copper fungicide", "Improve air circulation"],
-            "chemical": ["Chlorothalonil", "Mancozeb"],
-            "prevention": ["Crop rotation", "Mulching", "Drip irrigation"]
+        "early_blight": {
+            "description": "Fungal disease causing dark spots with concentric rings (target-like pattern)",
+            "organic": ["Remove and destroy infected leaves immediately", "Apply copper-based fungicide (Bordeaux mixture)", "Spray neem oil solution (2-3 tbsp per gallon)", "Improve air circulation by pruning"],
+            "chemical": ["Chlorothalonil (Daconil)", "Mancozeb", "Azoxystrobin (Quadris)"],
+            "prevention": ["Rotate crops every 2-3 years", "Use drip irrigation instead of overhead watering", "Mulch around plants to prevent soil splash", "Plant resistant varieties"]
         },
-        "late blight": {
-            "description": "Serious fungal disease causing water-soaked lesions",
-            "organic": ["Remove infected plants immediately", "Copper-based fungicides"],
-            "chemical": ["Metalaxyl", "Chlorothalonil"],
-            "prevention": ["Avoid overhead watering", "Plant resistant varieties", "Good spacing"]
+        "late_blight": {
+            "description": "Serious fungal disease causing water-soaked lesions that turn brown/black",
+            "organic": ["Remove and BURN infected plants immediately", "Apply copper fungicide weekly during wet weather", "Spray with Bacillus subtilis (Serenade)", "Remove all nearby volunteer plants"],
+            "chemical": ["Metalaxyl (Ridomil)", "Chlorothalonil", "Mancozeb + Metalaxyl combination"],
+            "prevention": ["Plant certified disease-free seeds/tubers", "Avoid overhead irrigation", "Ensure good air circulation", "Destroy all infected plant material"]
         },
-        "bacterial spot": {
-            "description": "Bacterial infection causing small dark spots",
-            "organic": ["Copper spray", "Remove infected leaves", "Improve drainage"],
-            "chemical": ["Copper hydroxide", "Streptomycin (if approved)"],
-            "prevention": ["Use disease-free seeds", "Avoid overhead irrigation", "Sanitize tools"]
+        "common_rust": {
+            "description": "Fungal disease causing small reddish-brown pustules on leaves",
+            "organic": ["Remove infected leaves early", "Apply sulfur-based fungicide", "Spray neem oil", "Improve plant spacing for airflow"],
+            "chemical": ["Azoxystrobin", "Propiconazole", "Mancozeb"],
+            "prevention": ["Plant resistant varieties", "Early planting to avoid peak rust season", "Proper plant spacing", "Remove crop debris after harvest"]
         },
-        "septoria leaf spot": {
-            "description": "Fungal disease with circular spots with gray centers",
-            "organic": ["Neem oil", "Remove lower leaves", "Mulch around plants"],
-            "chemical": ["Chlorothalonil", "Mancozeb"],
-            "prevention": ["Stake plants", "Water at base", "Remove debris"]
+        "northern_leaf_blight": {
+            "description": "Fungal disease causing long, gray-green cigar-shaped lesions",
+            "organic": ["Rotate crops for 2+ years", "Remove and destroy infected residue", "Apply copper-based fungicides"],
+            "chemical": ["Pyraclostrobin", "Azoxystrobin", "Propiconazole"],
+            "prevention": ["Use resistant hybrids", "Plow under crop residue", "Crop rotation with non-host crops", "Avoid excessive nitrogen fertilization"]
         },
-        "leaf mold": {
-            "description": "Fungal disease with pale green spots on upper leaves",
-            "organic": ["Improve ventilation", "Reduce humidity", "Sulfur spray"],
-            "chemical": ["Chlorothalonil"],
-            "prevention": ["Space plants properly", "Prune for air flow", "Control humidity"]
-        },
-        "common rust": {
-            "description": "Fungal disease with small circular to elongated pustules",
-            "organic": ["Sulfur-based fungicides", "Remove infected leaves early"],
-            "chemical": ["Azoxystrobin", "Propiconazole"],
-            "prevention": ["Plant resistant varieties", "Early planting", "Proper spacing"]
-        },
-        "northern leaf blight": {
-            "description": "Long gray-green lesions on leaves",
-            "organic": ["Rotate crops", "Remove crop residue"],
-            "chemical": ["Pyraclostrobin", "Azoxystrobin"],
-            "prevention": ["Use resistant hybrids", "Plow under residue", "Crop rotation"]
-        },
-        "gray leaf spot": {
-            "description": "Rectangular lesions with gray coloration",
-            "organic": ["Crop rotation", "Tillage to bury residue"],
-            "chemical": ["Strobilurin fungicides"],
-            "prevention": ["Resistant varieties", "Residue management", "Crop rotation"]
+        "healthy": {
+            "description": "No disease detected - plant appears healthy!",
+            "organic": ["Continue regular watering schedule", "Apply organic compost monthly", "Monitor for early signs of disease"],
+            "chemical": ["No treatment needed"],
+            "prevention": ["Maintain good air circulation", "Water at base of plant, not leaves", "Regular inspection of leaves", "Keep garden clean of debris"]
         }
     }
     
-    for key in treatments:
-        if key in disease_lower:
-            treatment = treatments[key]
-            urgency = "🔴 URGENT" if severity_class == "Severe" else "🟠 IMPORTANT" if severity_class == "Moderate" else "🟡 MONITOR"
-            return treatment, urgency
+    matched_treatment = None
     
-    return None, "ℹ️ MONITOR"
+    for key in treatments:
+        key_check = key.replace("_", "").lower()
+        disease_check = disease_lower.replace("_", "").replace(" ", "")
+        if key_check in disease_check:
+            matched_treatment = treatments[key]
+            break
+    
+    if severity_class == "Severe":
+        urgency = "🔴 CRITICAL - Immediate Action Required"
+    elif severity_class == "Moderate":
+        urgency = "🟠 WARNING - Treatment Needed Soon"
+    elif severity_class == "Mild":
+        urgency = "🟡 CAUTION - Monitor and Treat Early"
+    else:
+        urgency = "🟢 HEALTHY - Preventive Care Only"
+    
+    if matched_treatment:
+        return matched_treatment, urgency
+    else:
+        return {
+            "description": f"Disease detected: {disease_name.replace('___', ' - ').replace('_', ' ')}",
+            "organic": ["Remove affected leaves immediately", "Apply copper-based fungicide", "Improve air circulation", "Avoid overhead watering"],
+            "chemical": ["Consult local agricultural extension office", "Broad-spectrum fungicide may help"],
+            "prevention": ["Crop rotation", "Use disease-free seeds", "Proper plant spacing", "Regular monitoring"]
+        }, urgency
 
 def main():
     st.title("🌿 Crop Leaf Disease Detection System")
     st.markdown("### AI-Powered Disease Diagnosis with Severity Analysis")
-    st.markdown("Upload a leaf image to detect diseases in **Tomato**, **Potato**, or **Corn/Maize** plants")
     
     try:
         model, scaler, class_names = load_model()
     except Exception as e:
-        st.error(f"❌ Error loading model: {e}")
-        st.info("Please ensure model files are present in the app directory")
+        st.error(f"Error loading model: {e}")
         return
     
-    uploaded_file = st.file_uploader("📤 Choose a leaf image", type=["jpg", "jpeg", "png"], help="Upload a clear image of a leaf")
+    uploaded_file = st.file_uploader("📤 Upload a leaf image", type=["jpg", "jpeg", "png"])
     
     if uploaded_file is not None:
         image = Image.open(uploaded_file)
@@ -240,7 +256,7 @@ def main():
             st.image(image, caption="Uploaded Image", use_container_width=True)
         
         if st.button("🔬 Analyze Leaf", type="primary", use_container_width=True):
-            with st.spinner("🔍 Analyzing image..."):
+            with st.spinner("Analyzing..."):
                 try:
                     features = extract_all_features(img_array)
                     features_scaled = scaler.transform(features.reshape(1, -1))
@@ -272,92 +288,71 @@ def main():
                             st.warning(f"### 🟠 {severity_class}")
                         else:
                             st.error(f"### 🔴 {severity_class}")
-                        st.metric("Severity", f"{severity_score:.1f}%", help="Percentage of leaf affected by disease")
+                        st.metric("Severity", f"{severity_score:.1f}%")
                     
                     st.markdown("---")
-                    st.subheader("📈 Severity Analysis & Visualization")
+                    st.subheader("📈 Severity Visualization")
                     
                     viz_col1, viz_col2, viz_col3 = st.columns([1, 1, 1])
                     
                     with viz_col1:
-                        st.image(cv2.cvtColor(orig, cv2.COLOR_BGR2RGB), caption="Original Leaf", use_container_width=True)
+                        st.image(cv2.cvtColor(orig, cv2.COLOR_BGR2RGB), caption="Original", use_container_width=True)
                     
                     with viz_col2:
                         if diseased_mask is not None:
                             overlay = orig.copy()
                             overlay[diseased_mask > 0] = [0, 0, 255]
                             result_img = cv2.addWeighted(orig, 0.6, overlay, 0.4, 0)
-                            st.image(cv2.cvtColor(result_img, cv2.COLOR_BGR2RGB), caption="Diseased Regions (Red)", use_container_width=True)
+                            st.image(cv2.cvtColor(result_img, cv2.COLOR_BGR2RGB), caption="Affected Regions", use_container_width=True)
                     
                     with viz_col3:
                         st.markdown("#### Severity Scale")
                         st.progress(min(severity_score / 100, 1.0))
-                        st.markdown(f"**{severity_score:.1f}%** of leaf affected")
-                        st.markdown("---")
-                        if severity_score < 5:
-                            st.success("🟢 **Healthy/Minimal**\n\nNo immediate action needed")
-                        elif severity_score < 15:
-                            st.warning("🟡 **Mild**\n\nMonitor closely and consider preventive treatment")
-                        elif severity_score < 35:
-                            st.warning("🟠 **Moderate**\n\nTreatment recommended soon")
-                        else:
-                            st.error("🔴 **Severe**\n\n⚠️ Urgent treatment required!")
-                    
-                    if "healthy" not in prediction.lower():
-                        st.markdown("---")
-                        st.subheader("💊 Treatment Recommendations")
-                        
-                        treatment, urgency = get_treatment_recommendation(prediction, severity_class)
-                        
-                        if treatment:
-                            st.info(f"**{urgency}** - {treatment['description']}")
-                            
-                            treat_col1, treat_col2, treat_col3 = st.columns(3)
-                            
-                            with treat_col1:
-                                st.markdown("#### 🌱 Organic Treatment")
-                                for item in treatment['organic']:
-                                    st.markdown(f"• {item}")
-                            
-                            with treat_col2:
-                                st.markdown("#### 🧪 Chemical Treatment")
-                                for item in treatment['chemical']:
-                                    st.markdown(f"• {item}")
-                            
-                            with treat_col3:
-                                st.markdown("#### 🛡️ Prevention")
-                                for item in treatment['prevention']:
-                                    st.markdown(f"• {item}")
-                        else:
-                            st.info("Consult with a local agricultural expert for specific treatment recommendations.")
+                        st.markdown(f"**{severity_score:.1f}%** affected")
                     
                     st.markdown("---")
-                    st.success("✅ Analysis complete! Download this page as PDF for your records.")
+                    st.subheader("💊 Treatment Recommendations")
+                    
+                    treatment, urgency = get_treatment_recommendation(prediction, severity_class)
+                    
+                    st.info(f"**{urgency}**")
+                    st.markdown(f"*{treatment['description']}*")
+                    
+                    treat_col1, treat_col2, treat_col3 = st.columns(3)
+                    
+                    with treat_col1:
+                        st.markdown("#### 🌱 Organic Treatment")
+                        for item in treatment['organic']:
+                            st.markdown(f"• {item}")
+                    
+                    with treat_col2:
+                        st.markdown("#### 🧪 Chemical Treatment")
+                        for item in treatment['chemical']:
+                            st.markdown(f"• {item}")
+                    
+                    with treat_col3:
+                        st.markdown("#### 🛡️ Prevention")
+                        for item in treatment['prevention']:
+                            st.markdown(f"• {item}")
                 
                 except Exception as e:
-                    st.error(f"❌ Error during analysis: {str(e)}")
-                    st.info("Please try uploading a different image or check image quality")
+                    st.error(f"Error: {e}")
     
     with st.sidebar:
         st.image("https://img.icons8.com/color/96/000000/leaf.png", width=80)
         st.markdown("## 🌿 About")
-        st.markdown("This application uses **Traditional Machine Learning** with handcrafted features:")
-        st.markdown("• **Color** - HSV histograms")
-        st.markdown("• **Texture** - GLCM features")
-        st.markdown("• **Shape** - Morphological features")
+        st.markdown("AI-powered crop disease detection using traditional ML")
         
         st.markdown("---")
         st.markdown("### 📊 Supported Crops")
-        st.markdown("🍅 **Tomato** - 3 disease types")
-        st.markdown("🥔 **Potato** - 3 disease types")
+        st.markdown("🍅 Tomato")
+        st.markdown("🥔 Potato")
+        st.markdown("🌽 Corn/Maize")
         
         st.markdown("---")
-        st.markdown("### ✨ Novel Features")
-        st.markdown("📈 **Severity Scoring**")
-        st.markdown("Quantifies disease as % of affected leaf area")
-        st.markdown("")
-        st.markdown("💊 **Treatment Recommendations**")
-        st.markdown("Organic & chemical treatment options")
+        st.markdown("### ✨ Features")
+        st.markdown("📈 Severity Scoring")
+        st.markdown("💊 Treatment Recommendations")
         
         st.markdown("---")
         st.markdown("### 👨‍💻 Developed By")
@@ -365,18 +360,7 @@ def main():
         st.markdown("**Muhammad Arham Siddiqui** (428887)")
         st.markdown("")
         st.markdown("**Course:** CS-471 Machine Learning")
-        st.markdown("**Institution:** NUST, Pakistan")
-        st.markdown("**Class:** BEE-14 B")
-        
-        st.markdown("---")
-        st.markdown("### ℹ️ How to Use")
-        st.markdown("1. Upload a clear leaf image")
-        st.markdown("2. Click 'Analyze Leaf' button")
-        st.markdown("3. View diagnosis and severity")
-        st.markdown("4. Follow treatment recommendations")
-        
-        st.markdown("---")
-        st.caption("© 2024 NUST | All rights reserved")
+        st.markdown("**Class:** BEE-14 B, NUST")
 
 if __name__ == "__main__":
     main()
