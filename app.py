@@ -22,33 +22,33 @@ def preprocess_image(image, target_size=(256, 256)):
     img_resized = cv2.resize(image, target_size)
     img_blur = cv2.GaussianBlur(img_resized, (5, 5), 0)
     hsv = cv2.cvtColor(img_blur, cv2.COLOR_BGR2HSV)
-    
+
     lower_green = np.array([25, 40, 40])
     upper_green = np.array([90, 255, 255])
     mask_green = cv2.inRange(hsv, lower_green, upper_green)
-    
+
     lower_yellow = np.array([15, 30, 30])
     upper_yellow = np.array([35, 255, 255])
     mask_yellow = cv2.inRange(hsv, lower_yellow, upper_yellow)
-    
+
     lower_dark = np.array([35, 20, 20])
     upper_dark = np.array([85, 255, 150])
     mask_dark = cv2.inRange(hsv, lower_dark, upper_dark)
-    
+
     mask = cv2.bitwise_or(mask_green, mask_yellow)
     mask = cv2.bitwise_or(mask, mask_dark)
-    
+
     kernel = np.ones((5, 5), np.uint8)
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
-    
+
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if contours:
         largest_contour = max(contours, key=cv2.contourArea)
         mask_filtered = np.zeros_like(mask)
         cv2.drawContours(mask_filtered, [largest_contour], -1, 255, -1)
         mask = mask_filtered
-    
+
     segmented = cv2.bitwise_and(img_resized, img_resized, mask=mask)
     return img_resized, hsv, mask, segmented
 
@@ -108,32 +108,32 @@ def calculate_severity_score(image):
     total_leaf_pixels = np.sum(mask > 0)
     if total_leaf_pixels == 0:
         return 0, "No Leaf Detected", "gray", None
-    
+
     h, s, v = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
-    
+
     lower_diseased = np.array([5, 40, 50])
     upper_diseased = np.array([25, 255, 255])
     diseased_mask = cv2.inRange(hsv, lower_diseased, upper_diseased)
-    
+
     lower_necrotic = np.array([5, 20, 0])
     upper_necrotic = np.array([25, 255, 80])
     necrotic_mask = cv2.inRange(hsv, lower_necrotic, upper_necrotic)
-    
+
     lower_yellow = np.array([20, 50, 120])
     upper_yellow = np.array([35, 255, 255])
     yellow_mask = cv2.inRange(hsv, lower_yellow, upper_yellow)
-    
+
     shadow_mask = np.zeros_like(mask)
     shadow_mask[(v < 60) & (s < 40)] = 255
-    
+
     total_diseased = cv2.bitwise_or(diseased_mask, necrotic_mask)
     total_diseased = cv2.bitwise_or(total_diseased, yellow_mask)
     total_diseased = cv2.bitwise_and(total_diseased, cv2.bitwise_not(shadow_mask))
     total_diseased = cv2.bitwise_and(total_diseased, mask)
-    
+
     kernel = np.ones((3, 3), np.uint8)
     total_diseased = cv2.morphologyEx(total_diseased, cv2.MORPH_OPEN, kernel)
-    
+
     contours, _ = cv2.findContours(total_diseased, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if contours:
         min_area = total_leaf_pixels * 0.01
@@ -142,10 +142,10 @@ def calculate_severity_score(image):
             if cv2.contourArea(contour) > min_area:
                 cv2.drawContours(mask_cleaned, [contour], -1, 255, -1)
         total_diseased = mask_cleaned
-    
+
     diseased_pixels = np.sum(total_diseased > 0)
     severity_score = (diseased_pixels / total_leaf_pixels) * 100
-    
+
     if severity_score < 5:
         return severity_score, "Healthy/Minimal", "green", total_diseased
     elif severity_score < 15:
@@ -166,7 +166,7 @@ def format_class_name(class_name):
 
 def get_treatment_recommendation(disease_name, severity_class):
     disease_lower = disease_name.lower()
-    
+
     treatments = {
         "early_blight": {
             "description": "Fungal disease (Alternaria solani) causing dark spots with concentric rings forming a target-like pattern. Common in warm, humid conditions.",
@@ -238,17 +238,17 @@ def get_treatment_recommendation(disease_name, severity_class):
             ]
         }
     }
-    
+
     # Match disease to treatment
     matched_treatment = None
-    
+
     for key in treatments:
         key_check = key.replace("_", "").lower()
         disease_check = disease_lower.replace("_", "").replace(" ", "")
         if key_check in disease_check:
             matched_treatment = treatments[key]
             break
-    
+
     # Set urgency based on severity
     if "healthy" in disease_lower:
         urgency = "🟢 HEALTHY - Keep Up the Good Work!"
@@ -260,7 +260,7 @@ def get_treatment_recommendation(disease_name, severity_class):
         urgency = "🟡 CAUTION - Early Treatment Recommended"
     else:
         urgency = "ℹ️ Monitor Closely"
-    
+
     if matched_treatment:
         return matched_treatment, urgency
     else:
@@ -274,33 +274,33 @@ def get_treatment_recommendation(disease_name, severity_class):
 
 def main():
     st.title("🌿 Crop Leaf Disease Detection")
-    st.markdown("### AI-Powered Diagnosis for Tomato & Potato Plants")
+    st.markdown("### AI-Powered Diagnosis for Tomato Potato Plants & Corn")
     st.markdown("Detects **Healthy**, **Early Blight**, and **Late Blight** conditions")
-    
+
     try:
         model, scaler, class_names = load_model()
     except Exception as e:
         st.error(f"Error loading model: {e}")
         st.info("Please ensure model files (best_model.pkl, scaler.pkl, class_names.pkl) are present.")
         return
-    
+
     uploaded_file = st.file_uploader("📤 Upload a leaf image", type=["jpg", "jpeg", "png"], help="Upload a clear photo of a tomato or potato leaf")
-    
+
     if uploaded_file is not None:
         image = Image.open(uploaded_file)
         img_array = np.array(image)
-        
+
         if len(img_array.shape) == 2:
             img_array = cv2.cvtColor(img_array, cv2.COLOR_GRAY2BGR)
         elif img_array.shape[2] == 4:
             img_array = cv2.cvtColor(img_array, cv2.COLOR_RGBA2BGR)
         else:
             img_array = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
-        
+
         col1, col2 = st.columns([1, 1])
         with col1:
             st.image(image, caption="Uploaded Image", use_container_width=True)
-        
+
         if st.button("🔬 Analyze Leaf", type="primary", use_container_width=True):
             with st.spinner("Analyzing leaf..."):
                 try:
@@ -309,17 +309,17 @@ def main():
                     features_scaled = scaler.transform(features.reshape(1, -1))
                     prediction_idx = model.predict(features_scaled)[0]
                     prediction = class_names[prediction_idx]
-                    
+
                     # Calculate severity
                     severity_score, severity_class, severity_color, diseased_mask = calculate_severity_score(img_array)
                     orig, _, mask, _ = preprocess_image(img_array)
-                    
+
                     # Display Results
                     st.markdown("---")
                     st.subheader("📊 Diagnosis Results")
-                    
+
                     result_col1, result_col2 = st.columns([2, 1])
-                    
+
                     with result_col1:
                         formatted_prediction = format_class_name(prediction)
                         if "healthy" in prediction.lower():
@@ -327,7 +327,7 @@ def main():
                             st.balloons()
                         else:
                             st.error(f"### ⚠️ {formatted_prediction}")
-                    
+
                     with result_col2:
                         if severity_color == "green":
                             st.success(f"### 🟢 {severity_class}")
@@ -338,16 +338,16 @@ def main():
                         else:
                             st.error(f"### 🔴 {severity_class}")
                         st.metric("Affected Area", f"{severity_score:.1f}%")
-                    
+
                     # Severity Visualization
                     st.markdown("---")
                     st.subheader("📈 Severity Analysis")
-                    
+
                     viz_col1, viz_col2, viz_col3 = st.columns([1, 1, 1])
-                    
+
                     with viz_col1:
                         st.image(cv2.cvtColor(orig, cv2.COLOR_BGR2RGB), caption="Processed Leaf", use_container_width=True)
-                    
+
                     with viz_col2:
                         if diseased_mask is not None and np.sum(diseased_mask) > 0:
                             overlay = orig.copy()
@@ -356,7 +356,7 @@ def main():
                             st.image(cv2.cvtColor(result_img, cv2.COLOR_BGR2RGB), caption="Affected Regions (Red)", use_container_width=True)
                         else:
                             st.image(cv2.cvtColor(orig, cv2.COLOR_BGR2RGB), caption="No Disease Detected", use_container_width=True)
-                    
+
                     with viz_col3:
                         st.markdown("#### Severity Meter")
                         st.progress(min(severity_score / 100, 1.0))
@@ -367,44 +367,44 @@ def main():
                         st.markdown("🟡 5-15%: Mild")
                         st.markdown("🟠 15-35%: Moderate")
                         st.markdown("🔴 >35%: Severe")
-                    
+
                     # Treatment Recommendations
                     st.markdown("---")
                     st.subheader("💊 Treatment Recommendations")
-                    
+
                     treatment, urgency = get_treatment_recommendation(prediction, severity_class)
-                    
+
                     st.info(f"**{urgency}**")
                     st.markdown(f"_{treatment['description']}_")
-                    
+
                     treat_col1, treat_col2, treat_col3 = st.columns(3)
-                    
+
                     with treat_col1:
                         st.markdown("#### 🌱 Organic Options")
                         for item in treatment['organic']:
                             st.markdown(f"• {item}")
-                    
+
                     with treat_col2:
                         st.markdown("#### 🧪 Chemical Options")
                         for item in treatment['chemical']:
                             st.markdown(f"• {item}")
-                    
+
                     with treat_col3:
                         st.markdown("#### 🛡️ Prevention Tips")
                         for item in treatment['prevention']:
                             st.markdown(f"• {item}")
-                    
+
                     st.markdown("---")
                     st.success("✅ Analysis Complete!")
-                
+
                 except Exception as e:
                     st.error(f"Error during analysis: {str(e)}")
-    
+
     # Sidebar
     with st.sidebar:
         st.markdown("## 🌿 About This App")
         st.markdown("AI-powered disease detection for tomato and potato plants using traditional machine learning.")
-        
+
         st.markdown("---")
         st.markdown("### 🎯 Supported Classes")
         st.markdown("**Tomato:**")
@@ -416,7 +416,7 @@ def main():
         st.markdown("• ✅ Healthy")
         st.markdown("• 🦠 Early Blight")
         st.markdown("• 🦠 Late Blight")
-        
+
         st.markdown("---")
         st.markdown("### ✨ Features")
         st.markdown("📊 **Disease Classification**")
@@ -427,7 +427,7 @@ def main():
         st.markdown("")
         st.markdown("💊 **Treatment Guide**")
         st.markdown("Organic & chemical options")
-        
+
         st.markdown("---")
         st.markdown("### 👨‍💻 Developed By")
         st.markdown("**Muhammad Haris**")
@@ -435,13 +435,13 @@ def main():
         st.markdown("")
         st.markdown("**Muhammad Arham Siddiqui**")
         st.markdown("Roll No: 428887")
-        
+
         st.markdown("---")
         st.markdown("### 📚 Course Info")
         st.markdown("**CS-471** Machine Learning")
         st.markdown("**Class:** BEE-14 B")
         st.markdown("**Institution:** NUST, Pakistan")
-        
+
         st.markdown("---")
         st.caption("© 2024 | All Rights Reserved")
 
